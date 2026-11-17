@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: shoplite-prod
+  name: shoplite-dev
   namespace: argocd
 spec:
   project: default
@@ -12,13 +12,16 @@ spec:
       helm:
         releaseName: shoplite
         valueFiles:
-          - $values/environments/prod/values.yaml
+          - $values/envs/dev/values.yaml
     - repoURL: https://github.com/Swapno963/shoplite-gitops.git
       targetRevision: main
       ref: values
   destination:
     server: https://kubernetes.default.svc
-    namespace: shoplite-prod
+    namespace: shoplite-dev
   syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
     syncOptions:
       - CreateNamespace=true
