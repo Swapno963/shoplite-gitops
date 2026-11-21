@@ -8,7 +8,7 @@ web:
 catalogApi:
   replicaCount: 1
   image:
-    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
+    tag: 278725ae187ec02273aaec17b00a0ff50871fd40
 orderWorker:
   replicaCount: 1
   image:
