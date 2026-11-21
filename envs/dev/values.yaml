@@ -6,17 +6,17 @@ ingress:
 web:
   replicaCount: 1
   image:
-    tag: dev
+    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
 
 catalogApi:
   replicaCount: 1
   image:
-    tag: dev
+    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
 
 orderWorker:
   replicaCount: 1
   image:
-    tag: dev
+    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
   hpa:
     enabled: false
 
