@@ -8,6 +8,9 @@ The Helm chart lives in [shoplite-app](https://github.com/Swapno963/shoplite-app
 shoplite-gitops/
 ├── apps/
 │   └── argocd-applications
+│       ├── shoplite-project.yaml
+│       ├── shoplite-dev.yaml
+│       └── shoplite-prod.yaml
 └── envs/
     ├── dev/
     │   └── values.yaml
@@ -17,32 +20,132 @@ shoplite-gitops/
 
 ## Sync policy
 
-| Environment | Application     | Namespace       | Git sync                         | Self-heal                                      |
-|-------------|-----------------|-----------------|----------------------------------|------------------------------------------------|
-| Development | `shoplite-dev`  | `shoplite-dev`  | Automatic (`prune` + `selfHeal`) | Yes (part of automated sync)                   |
-| Production  | `shoplite-prod` | `shoplite-prod` | Manual (UI or `argocd app sync`) | No (ArgoCD only self-heals with automated sync) |
+| Environment | Application     | Namespace       | Git sync                                      | Self-heal                    | Prune |
+|-------------|-----------------|-----------------|-----------------------------------------------|------------------------------|-------|
+| Development | `shoplite-dev`  | `shoplite-dev`  | Automatic                                     | Yes                          | Yes   |
+| Production  | `shoplite-prod` | `shoplite-prod` | Automatic (required for self-heal)            | Yes                          | No    |
 
 ## Bootstrap
 
-Register both GitHub repositories in ArgoCD if they are private. Then apply the Applications:
+Run these from a machine that can reach the cluster (`kubectl` context already set). Clone this repo so the `kubectl apply` paths resolve.
+
+### 1. Install Argo CD
+
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+```
+
+Wait until the control plane is ready:
+
+```bash
+kubectl get all -n argocd
+kubectl -n argocd rollout status deploy/argocd-server
+```
+
+### 2. Expose the Argo CD server
+
+Port-forward the API/UI (HTTPS on 8080):
+
+```bash
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+```
+
+Open https://localhost:8080 (accept the self-signed certificate). Leave this terminal running.
+
+Optional CLI (install once: https://argo-cd.readthedocs.io/en/stable/cli_installation/):
+
+```bash
+argocd login localhost:8080 --insecure
+```
+
+Username is `admin`. Password is the value from the next step.
+
+### 3. Get the Argo CD admin password
+
+```bash
+kubectl get secret argocd-initial-admin-secret -n argocd \
+  -o jsonpath="{.data.password}" | base64 --decode
+echo
+```
+
+Sign in to the UI with user `admin` and that password. Change it after first login if this is a shared cluster.
+
+### 4. Register Git repositories
+
+Both Applications read two repos. If either is private, add credentials in the UI (**Settings → Repositories → Connect Repo**) or with the CLI:
+
+```bash
+# PAT or GitHub App token with contents:read on both repos
+export GITOPS_TOKEN=ghp_...
+
+argocd repo add https://github.com/Swapno963/shoplite-app.git \
+  --username git \
+  --password "$GITOPS_TOKEN"
+
+argocd repo add https://github.com/Swapno963/shoplite-gitops.git \
+  --username git \
+  --password "$GITOPS_TOKEN"
+```
+
+Use the same token Argo CD will use to fetch `helm/shoplite` and `envs/*/values.yaml`.
+
+### 5. Apply the Argo CD Project and Applications
+
+`AppProject/shoplite` must exist before the Applications (they set `spec.project: shoplite`). Apply the directory so the Project and both Applications are created:
+
+```bash
+cd /path/to/shoplite-gitops
+
+kubectl apply -n argocd -f apps/argocd-applications/shoplite-project.yaml
+kubectl apply -n argocd -f apps/argocd-applications/shoplite-dev.yaml
+kubectl apply -n argocd -f apps/argocd-applications/shoplite-prod.yaml
+```
+
+Or apply everything in that folder:
 
 ```bash
 kubectl apply -n argocd -f apps/argocd-applications/
 ```
 
-Check status:
+| Resource | Name | Role |
+|----------|------|------|
+| AppProject | `shoplite` | Allows those two GitHub repos and destinations `shoplite-dev` / `shoplite-prod` |
+| Application | `shoplite-dev` | Auto-sync, prune, self-heal into `shoplite-dev` |
+| Application | `shoplite-prod` | Auto-sync, self-heal, **no prune** into `shoplite-prod` |
+
+`CreateNamespace=true` creates the destination namespaces. Cluster-scoped Namespace creates are allowed on the Project.
+
+### 6. Create application secrets
+
+Helm does not create `shoplite-secret`. Create it in each destination namespace or the pods stay unready:
 
 ```bash
+kubectl create namespace shoplite-dev --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace shoplite-prod --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl create secret generic shoplite-secret -n shoplite-dev \
+  --from-literal=POSTGRES_PASSWORD='CHANGE_ME' \
+  --from-literal=DJANGO_SECRET_KEY='CHANGE_ME' \
+  --from-literal=REDIS_PASSWORD='CHANGE_ME'
+
+kubectl create secret generic shoplite-secret -n shoplite-prod \
+  --from-literal=POSTGRES_PASSWORD='CHANGE_ME' \
+  --from-literal=DJANGO_SECRET_KEY='CHANGE_ME' \
+  --from-literal=REDIS_PASSWORD='CHANGE_ME'
+```
+
+### 7. Confirm sync
+
+```bash
+kubectl -n argocd get appproject shoplite
 kubectl -n argocd get applications
+kubectl -n argocd get application shoplite-dev shoplite-prod -o yaml | less
 ```
 
-Development syncs itself once Git is reachable. Production stays `OutOfSync` until you sync it:
+Both Applications sync themselves once Git is reachable. Production auto-applies Git changes and self-heals drift, but does not prune resources that disappear from Git.
 
-```bash
-argocd app sync shoplite-prod
-```
-
-Secrets (`shoplite-secret`) are not managed here. Create them in each destination namespace before the workloads will become Healthy, matching the Helm `secrets.existingSecret` value.
+In the UI you should see `shoplite-dev` and `shoplite-prod` under project `shoplite`, moving to `Synced` / `Healthy` after the first reconcile (secrets and ECR pull must already work on the nodes).
 
 ## GitOps: page title change (no manual deploy)
 
@@ -113,7 +216,7 @@ http://dev.shoplite.local
 
 The browser tab title should be `ShopLite GitOps`. Hard-refresh if the old title is cached.
 
-Production does not pick this up until someone updates `envs/prod/values.yaml` and manually syncs `shoplite-prod`.
+Production picks the same change up after `envs/prod/values.yaml` is updated and pushed; `shoplite-prod` auto-syncs. Prune stays off, so deleted Helm objects are not removed from the cluster automatically.
 
 ## Self-healing demonstration (development)
 
@@ -151,6 +254,6 @@ kubectl -n argocd get application shoplite-dev
 
 Replicas return to `1`. The Application is `Synced` and `Healthy` again.
 
-### Contrast with production
+### Production self-heal
 
-The same `kubectl scale` against `shoplite-prod` stays drifted until someone syncs `shoplite-prod` manually. That is intentional: production does not auto-sync.
+The same `kubectl scale` against `shoplite-prod` is reverted because `syncPolicy.automated.selfHeal` is enabled. Native Argo CD self-heal requires automated sync, so Git changes to `envs/prod/values.yaml` also apply without `argocd app sync`. `prune` is `false`, so resources removed from Git are left in the cluster until someone deletes them.

@@ -4,7 +4,7 @@ metadata:
   name: shoplite-dev
   namespace: argocd
 spec:
-  project: default
+  project: shoplite
   sources:
     - repoURL: https://github.com/Swapno963/shoplite-app.git
       targetRevision: main

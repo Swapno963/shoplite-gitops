@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shoplite
+  namespace: argocd
+spec:
+  description: ShopLite development and production
+  sourceRepos:
+    - https://github.com/Swapno963/shoplite-app.git
+    - https://github.com/Swapno963/shoplite-gitops.git
+  destinations:
+    - namespace: shoplite-dev
+      server: https://kubernetes.default.svc
+    - namespace: shoplite-prod
+      server: https://kubernetes.default.svc
+  # CreateNamespace=true on the Applications creates Namespace objects.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
