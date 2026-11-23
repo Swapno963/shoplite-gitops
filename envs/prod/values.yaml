@@ -1,7 +1,8 @@
 namespace: shoplite-prod
 
 ingress:
-  host: shoplite.example.com
+  # Empty = any Host, including the AWS ALB DNS name.
+  host: ""
 
 web:
   replicaCount: 2
