@@ -1,32 +1,25 @@
 namespace: shoplite-dev
-
 ingress:
   host: dev.shoplite.local
-
 web:
   replicaCount: 1
   image:
-    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
-
+    tag: 89f6e23dc3f57ffc07ec28d44a5121a6b9444fb7
 catalogApi:
   replicaCount: 1
   image:
-    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
-
+    tag: 278725ae187ec02273aaec17b00a0ff50871fd40
 orderWorker:
   replicaCount: 1
   image:
-    tag: 6443052e1ee377677ef404801aa994051ff5f8e0
+    tag: 278725ae187ec02273aaec17b00a0ff50871fd40
   hpa:
     enabled: false
-
 postgres:
   storage: 5Gi
-
 applicationConfig:
   DJANGO_DEBUG: "true"
   ALLOWED_HOSTS: "*"
   LOG_LEVEL: "DEBUG"
-
 secrets:
   existingSecret: shoplite-secret
