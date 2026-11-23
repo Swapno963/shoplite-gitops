@@ -12,7 +12,7 @@ catalogApi:
 orderWorker:
   replicaCount: 1
   image:
-    tag: 278725ae187ec02273aaec17b00a0ff50871fd40
+    tag: 737a3ab99e973a51123e9797ffffe963ab4efe4c
   hpa:
     enabled: false
 postgres:
