@@ -18,12 +18,83 @@ shoplite-gitops/
         └── values.yaml
 ```
 
+## Architecture
+
+Argo CD runs in-cluster (`argocd` namespace). Each environment is one `Application` in `AppProject/shoplite`. The chart is rendered from **shoplite-app** `helm/shoplite` on `main`; overlay values come from this repo (`envs/dev` or `envs/prod`).
+
+```mermaid
+flowchart TB
+  subgraph git [Git]
+    appRepo["shoplite-app helm/shoplite"]
+    gitopsRepo["shoplite-gitops envs and Applications"]
+    gha["GitHub Actions build and push ECR"]
+  end
+
+  subgraph cluster [Kubernetes]
+    argocd["Argo CD"]
+    subgraph nsDev [shoplite-dev]
+      webDev[web]
+      apiDev[catalog-api]
+      workerDev[order-worker]
+      pgDev[postgres]
+      redisDev[redis]
+    end
+    subgraph nsProd [shoplite-prod]
+      webProd[web]
+      apiProd[catalog-api]
+      workerProd[order-worker]
+      pgProd[postgres]
+      redisProd[redis]
+    end
+  end
+
+  ecr["Amazon ECR"]
+
+  appRepo --> gha
+  gha --> ecr
+  gha -->|"bump image tags envs/dev"| gitopsRepo
+  appRepo -->|"chart main"| argocd
+  gitopsRepo -->|"values plus Application CRs"| argocd
+  ecr -->|"pull by tag"| webDev
+  ecr -->|"pull by tag"| apiDev
+  ecr -->|"pull by tag"| workerDev
+  ecr -->|"pull by tag"| webProd
+  ecr -->|"pull by tag"| apiProd
+  ecr -->|"pull by tag"| workerProd
+  argocd -->|"auto-sync prune selfHeal"| nsDev
+  argocd -->|"auto-sync selfHeal no prune"| nsProd
+  webDev --> apiDev
+  apiDev --> pgDev
+  apiDev --> redisDev
+  redisDev --> workerDev
+  workerDev --> pgDev
+  webProd --> apiProd
+  apiProd --> pgProd
+  apiProd --> redisProd
+  redisProd --> workerProd
+  workerProd --> pgProd
+```
+
+Traffic path (unchanged by GitOps): ALB to ingress-nginx NodePort `30080`, then ClusterIP Services in `shoplite-dev` or `shoplite-prod`.
+
+```mermaid
+flowchart LR
+  user[User] --> alb[AWS ALB]
+  alb --> nginx[ingress-nginx]
+  nginx -->|"Host dev.shoplite.local"| nsDevIngress[shoplite-dev]
+  nginx -->|"prod host"| nsProdIngress[shoplite-prod]
+```
+
 ## Sync policy
 
-| Environment | Application     | Namespace       | Git sync                                      | Self-heal                    | Prune |
-|-------------|-----------------|-----------------|-----------------------------------------------|------------------------------|-------|
-| Development | `shoplite-dev`  | `shoplite-dev`  | Automatic                                     | Yes                          | Yes   |
-| Production  | `shoplite-prod` | `shoplite-prod` | Automatic (required for self-heal)            | Yes                          | No    |
+
+| Environment | Application     | Namespace       | Git sync                           | Self-heal | Prune |
+| ----------- | --------------- | --------------- | ---------------------------------- | --------- | ----- |
+| Development | `shoplite-dev`  | `shoplite-dev`  | Automatic                          | Yes       | Yes   |
+| Production  | `shoplite-prod` | `shoplite-prod` | Automatic (required for self-heal) | Yes       | No    |
+
+
+
 
 ## Bootstrap
 
@@ -43,6 +114,8 @@ kubectl get all -n argocd
 kubectl -n argocd rollout status deploy/argocd-server
 ```
 
+
+
 ### 2. Expose the Argo CD server
 
 Port-forward the API/UI (HTTPS on 8080):
@@ -51,9 +124,9 @@ Port-forward the API/UI (HTTPS on 8080):
 kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
-Open https://localhost:8080 (accept the self-signed certificate). Leave this terminal running.
+Open [https://localhost:8080](https://localhost:8080) (accept the self-signed certificate). Leave this terminal running.
 
-Optional CLI (install once: https://argo-cd.readthedocs.io/en/stable/cli_installation/):
+Optional CLI (install once: [https://argo-cd.readthedocs.io/en/stable/cli_installation/](https://argo-cd.readthedocs.io/en/stable/cli_installation/)):
 
 ```bash
 argocd login localhost:8080 --insecure
@@ -79,13 +152,20 @@ Both Applications read two repos. If either is private, add credentials in the U
 # PAT or GitHub App token with contents:read on both repos
 export GITOPS_TOKEN=ghp_...
 
-argocd repo add https://github.com/Swapno963/shoplite-app.git \
-  --username git \
-  --password "$GITOPS_TOKEN"
 
-argocd repo add https://github.com/Swapno963/shoplite-gitops.git \
-  --username git \
-  --password "$GITOPS_TOKEN"
+kubectl -n argocd create secret generic repo-shoplite-app \
+  --from-literal=type=git \
+  --from-literal=url=https://github.com/Swapno963/shoplite-app.git \
+  --from-literal=username=git \
+  --from-literal=password="$GITOPS_TOKEN"
+kubectl -n argocd label secret repo-shoplite-app argocd.argoproj.io/secret-type=repository
+
+kubectl -n argocd create secret generic repo-shoplite-gitops \
+  --from-literal=type=git \
+  --from-literal=url=https://github.com/Swapno963/shoplite-gitops.git \
+  --from-literal=username=git \
+  --from-literal=password="$GITOPS_TOKEN"
+kubectl -n argocd label secret repo-shoplite-gitops argocd.argoproj.io/secret-type=repository
 ```
 
 Use the same token Argo CD will use to fetch `helm/shoplite` and `envs/*/values.yaml`.
@@ -95,7 +175,7 @@ Use the same token Argo CD will use to fetch `helm/shoplite` and `envs/*/values.
 `AppProject/shoplite` must exist before the Applications (they set `spec.project: shoplite`). Apply the directory so the Project and both Applications are created:
 
 ```bash
-cd /path/to/shoplite-gitops
+cd shoplite-gitops
 
 kubectl apply -n argocd -f apps/argocd-applications/shoplite-project.yaml
 kubectl apply -n argocd -f apps/argocd-applications/shoplite-dev.yaml
@@ -108,11 +188,13 @@ Or apply everything in that folder:
 kubectl apply -n argocd -f apps/argocd-applications/
 ```
 
-| Resource | Name | Role |
-|----------|------|------|
-| AppProject | `shoplite` | Allows those two GitHub repos and destinations `shoplite-dev` / `shoplite-prod` |
-| Application | `shoplite-dev` | Auto-sync, prune, self-heal into `shoplite-dev` |
-| Application | `shoplite-prod` | Auto-sync, self-heal, **no prune** into `shoplite-prod` |
+
+| Resource    | Name            | Role                                                                            |
+| ----------- | --------------- | ------------------------------------------------------------------------------- |
+| AppProject  | `shoplite`      | Allows those two GitHub repos and destinations `shoplite-dev` / `shoplite-prod` |
+| Application | `shoplite-dev`  | Auto-sync, prune, self-heal into `shoplite-dev`                                 |
+| Application | `shoplite-prod` | Auto-sync, self-heal, **no prune** into `shoplite-prod`                         |
+
 
 `CreateNamespace=true` creates the destination namespaces. Cluster-scoped Namespace creates are allowed on the Project.
 
@@ -124,16 +206,26 @@ Helm does not create `shoplite-secret`. Create it in each destination namespace 
 kubectl create namespace shoplite-dev --dry-run=client -o yaml | kubectl apply -f -
 kubectl create namespace shoplite-prod --dry-run=client -o yaml | kubectl apply -f -
 
-kubectl create secret generic shoplite-secret -n shoplite-dev \
-  --from-literal=POSTGRES_PASSWORD='CHANGE_ME' \
-  --from-literal=DJANGO_SECRET_KEY='CHANGE_ME' \
-  --from-literal=REDIS_PASSWORD='CHANGE_ME'
+kubectl -n shoplite-dev create secret generic shoplite-secret \
+  --from-literal=POSTGRES_PASSWORD='my-db-password' \
+  --from-literal=DJANGO_SECRET_KEY='my-django-secret' \
+  --from-literal=REDIS_PASSWORD='my-redis-secret'
 
-kubectl create secret generic shoplite-secret -n shoplite-prod \
-  --from-literal=POSTGRES_PASSWORD='CHANGE_ME' \
-  --from-literal=DJANGO_SECRET_KEY='CHANGE_ME' \
-  --from-literal=REDIS_PASSWORD='CHANGE_ME'
+kubectl -n shoplite-prod create secret generic shoplite-secret \
+  --from-literal=POSTGRES_PASSWORD='my-db-password' \
+  --from-literal=DJANGO_SECRET_KEY='my-django-secret' \
+  --from-literal=REDIS_PASSWORD='my-redis-secret
+
+
+For update password
+kubectl -n shoplite-dev create secret generic shoplite-secret \
+  --from-literal=POSTGRES_PASSWORD='my-db-password' \
+  --from-literal=DJANGO_SECRET_KEY='my-django-secret' \
+  --from-literal=REDIS_PASSWORD='my-redis-secret' \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
+
+
 
 ### 7. Confirm sync
 
@@ -163,7 +255,7 @@ Edit `application/web/index.html` and set a new title, for example:
 <title>ShopLite GitOps</title>
 ```
 
-2. Push the application change:
+1. Push the application change:
 
 ```bash
 git add application/web/index.html
@@ -171,7 +263,7 @@ git commit -m "Change web page title"
 git push origin main
 ```
 
-3. Wait for GitHub Actions `Build Web` to push the image. Copy the commit SHA:
+1. Wait for GitHub Actions `Build Web` to push the image. Copy the commit SHA:
 
 ```bash
 WEB_SHA=$(git rev-parse HEAD)
@@ -187,7 +279,7 @@ aws ecr describe-images \
   --region ap-southeast-1
 ```
 
-4. Point development at that image in this GitOps repo and push. That Git commit is the desired state; ArgoCD applies it.
+1. Point development at that image in this GitOps repo and push. That Git commit is the desired state; ArgoCD applies it.
 
 ```bash
 cd /path/to/shoplite-gitops
@@ -201,7 +293,7 @@ git commit -m "Deploy web title change to development"
 git push origin main
 ```
 
-5. Wait for ArgoCD (no deploy command):
+1. Wait for ArgoCD (no deploy command):
 
 ```bash
 kubectl -n argocd get application shoplite-dev -w
@@ -228,7 +320,7 @@ ArgoCD reverts live cluster drift on `shoplite-dev` because `syncPolicy.automate
 kubectl -n shoplite-dev get deploy web -o jsonpath='{.spec.replicas}{"\n"}'
 ```
 
-2. Change the live resource so it no longer matches Git:
+1. Change the live resource so it no longer matches Git:
 
 ```bash
 kubectl -n shoplite-dev scale deploy web --replicas=5
@@ -236,7 +328,7 @@ kubectl -n shoplite-dev scale deploy web --replicas=5
 
 You can instead use `kubectl patch` or `kubectl edit` on the same Deployment.
 
-3. Confirm drift:
+1. Confirm drift:
 
 ```bash
 kubectl -n shoplite-dev get deploy web
@@ -245,7 +337,7 @@ kubectl -n argocd get application shoplite-dev
 
 The Deployment should show `5` replicas and the Application should briefly report `OutOfSync`.
 
-4. Wait for the reconcile (ArgoCD typically refreshes within a few seconds). Re-check:
+1. Wait for the reconcile (ArgoCD typically refreshes within a few seconds). Re-check:
 
 ```bash
 kubectl -n shoplite-dev get deploy web -o jsonpath='{.spec.replicas}{"\n"}'
