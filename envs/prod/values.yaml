@@ -31,7 +31,7 @@ applicationConfig:
   DJANGO_DEBUG: "false"
   ALLOWED_HOSTS: "*"
   LOG_LEVEL: "INFO"
-  CHAOS_ERROR_RATE: "0.5"
+  # CHAOS_ERROR_RATE: "0.5"
 
 secrets:
   existingSecret: shoplite-secret
