@@ -4,15 +4,15 @@ ingress:
 web:
   replicaCount: 1
   image:
-    tag: a0f6293b9e516a0fc97e0b4844ce550a58fc2633
+    tag: f71dabcee65b7e61c709500ec23b0ce3d9f25130
 catalogApi:
   replicaCount: 1
   image:
-    tag: a0f6293b9e516a0fc97e0b4844ce550a58fc2633
+    tag: f71dabcee65b7e61c709500ec23b0ce3d9f25130
 orderWorker:
   replicaCount: 1
   image:
-    tag: a0f6293b9e516a0fc97e0b4844ce550a58fc2633
+    tag: f71dabcee65b7e61c709500ec23b0ce3d9f25130
   hpa:
     enabled: false
 postgres:
